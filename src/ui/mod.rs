@@ -1,3 +1,4 @@
+pub mod atom_info;
 pub mod menu;
 pub mod vasprun_panel;
 

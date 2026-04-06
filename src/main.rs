@@ -49,6 +49,7 @@ fn main() {
         .insert_resource(WyckoffVisible(false))
         .insert_resource(MirrorsVisible(false))
         .insert_resource(PeriodicImages(true))
+        .insert_resource(vis::selection::SelectedAtom::default())
         .insert_resource(ui::menu::SupercellInput::default())
         .insert_resource(ui::menu::SymprecInput::default())
         .insert_resource(ui::menu::MirrorVisibility::default())
@@ -78,6 +79,9 @@ fn main() {
         .add_systems(Update, handle_open_structure)
         .add_systems(Update, handle_open_vasprun)
         .add_systems(Update, handle_open_volumetric)
+        .add_systems(Update, atom_pick_system)
+        .add_systems(Update, ui::atom_info::atom_info_panel)
+        .add_systems(Update, screenshot_system)
         .add_systems(Update, vis::sync_gizmo_camera)
         .add_systems(Update, update_gizmo_viewport)
         .run();
@@ -1214,4 +1218,87 @@ fn handle_open_volumetric(
         }
         Err(e) => eprintln!("Error loading volumetric data: {e}"),
     }
+}
+
+/// Click to select an atom. Esc to deselect.
+fn atom_pick_system(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut selected: ResMut<vis::selection::SelectedAtom>,
+    cam_query: Query<&Transform, (With<Camera3d>, Without<vis::axes_gizmo::GizmoCamera>)>,
+    atom_query: Query<(Entity, &vis::atoms::AtomMarker, &Transform), Without<Camera3d>>,
+    highlight_query: Query<Entity, With<vis::selection::SelectionHighlight>>,
+    mut contexts: EguiContexts,
+) {
+    // Esc to deselect
+    if keys.just_pressed(KeyCode::Escape) {
+        selected.index = None;
+        selected.entity = None;
+        vis::selection::despawn_selection_highlight(&mut commands, &highlight_query);
+        return;
+    }
+
+    // Only pick on left click release (not drag)
+    if !mouse.just_released(MouseButton::Left) {
+        return;
+    }
+
+    // Don't pick if egui wants input
+    if contexts.ctx_mut().wants_pointer_input() {
+        return;
+    }
+
+    let window = windows.single();
+    let Some(cursor_pos) = window.cursor_position() else { return };
+    let cam_transform = cam_query.single();
+
+    // Collect atoms
+    let atoms: Vec<_> = atom_query.iter().collect();
+
+    if let Some((_entity, atom_idx)) = vis::selection::pick_atom(
+        cam_transform, window, cursor_pos, &atoms,
+    ) {
+        // Despawn old highlight
+        vis::selection::despawn_selection_highlight(&mut commands, &highlight_query);
+
+        // Find the atom's transform for positioning
+        if let Some((_, _, atom_transform)) = atoms.iter().find(|(_, m, _)| m.index == atom_idx) {
+            let highlight_entity = vis::selection::spawn_selection_highlight(
+                &mut commands, &mut meshes, &mut materials,
+                atom_transform.translation,
+                atom_transform.scale.x,
+            );
+            selected.index = Some(atom_idx);
+            selected.entity = Some(highlight_entity);
+        }
+    }
+}
+
+/// F12 or menu: save screenshot.
+fn screenshot_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut events: EventReader<MenuAction>,
+    mut commands: Commands,
+) {
+    let take = keys.just_pressed(KeyCode::F12)
+        || events.read().any(|e| matches!(e, MenuAction::TakeScreenshot));
+
+    if !take { return; }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let filename = format!("alfred_screenshot_{timestamp}.png");
+    let path = std::path::PathBuf::from(&filename);
+
+    use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+
+    commands.spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path));
+    println!("Screenshot saved to {filename}");
 }

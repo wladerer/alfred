@@ -1,6 +1,7 @@
 pub mod arrows;
 pub mod atoms;
 pub mod axes_gizmo;
+pub mod selection;
 pub mod isosurface;
 pub mod ldos_coloring;
 pub mod axis_indicator;

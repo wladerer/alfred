@@ -20,7 +20,8 @@
       "Bash(ls ~/github/vasprun*)",
       "Bash(ls:*)",
       "Bash(wc -l /home/wladerer/github/vasprunrs/src/parser/*.rs /home/wladerer/github/vasprunrs/src/*.rs)",
-      "Bash(source \"$HOME/.cargo/env\"; cargo test 2>&1 | grep:*)"
+      "Bash(source \"$HOME/.cargo/env\"; cargo test 2>&1 | grep:*)",
+      "Bash(find:*)"
     ]
   }
 }

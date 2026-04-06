@@ -10,6 +10,7 @@ pub enum MenuAction {
     OpenStructure(std::path::PathBuf),
     OpenVasprun(std::path::PathBuf),
     OpenVolumetric(std::path::PathBuf),
+    TakeScreenshot,
     Quit,
     ResetCamera,
     ToggleUnitCell,
@@ -74,9 +75,10 @@ pub fn menu_bar_system(
             ui.menu_button("File", |ui| {
                 if ui.button("Open Structure...").clicked() {
                     ui.close_menu();
+                    // POSCAR, CONTCAR have no extension; .vasp and .poscar do
                     if let Some(path) = rfd::FileDialog::new()
-                        .set_title("Open Structure File")
-                        .add_filter("POSCAR/CONTCAR", &["vasp", "POSCAR", "CONTCAR", "poscar", "contcar"])
+                        .set_title("Open Structure (POSCAR / CONTCAR / *.vasp / *.poscar)")
+                        .add_filter("Structure files", &["vasp", "poscar"])
                         .add_filter("All files", &["*"])
                         .pick_file()
                     {
@@ -87,7 +89,8 @@ pub fn menu_bar_system(
                     ui.close_menu();
                     if let Some(path) = rfd::FileDialog::new()
                         .set_title("Open vasprun.xml")
-                        .add_filter("vasprun", &["xml", "gz"])
+                        .add_filter("XML files", &["xml"])
+                        .add_filter("Gzipped XML", &["gz"])
                         .add_filter("All files", &["*"])
                         .pick_file()
                     {
@@ -96,14 +99,20 @@ pub fn menu_bar_system(
                 }
                 if ui.button("Open Volumetric...").clicked() {
                     ui.close_menu();
+                    // CHGCAR, LOCPOT, etc. have no extension; wavefunction files use .vasp
                     if let Some(path) = rfd::FileDialog::new()
-                        .set_title("Open Volumetric Data")
-                        .add_filter("CHGCAR/LOCPOT/wavefunction", &["vasp", "CHGCAR", "LOCPOT", "ELFCAR", "PARCHG"])
+                        .set_title("Open Volumetric (CHGCAR / LOCPOT / *.vasp)")
+                        .add_filter("Volumetric files", &["vasp"])
                         .add_filter("All files", &["*"])
                         .pick_file()
                     {
                         menu_events.send(MenuAction::OpenVolumetric(path));
                     }
+                }
+                ui.separator();
+                if ui.button("Screenshot  [F12]").clicked() {
+                    menu_events.send(MenuAction::TakeScreenshot);
+                    ui.close_menu();
                 }
                 ui.separator();
                 if ui.button("Quit").clicked() {
