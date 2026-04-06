@@ -6,7 +6,7 @@ mod vis;
 
 use analysis::SymmetryAxes;
 use bevy::prelude::*;
-use bevy_egui::{EguiPlugin, EguiContexts};
+use bevy_egui::{EguiPlugin, EguiContexts, egui};
 use std::path::Path;
 use ui::menu::MenuAction;
 use vis::{AxisIndicator, UnitCellOutline, WyckoffHighlight, MirrorPlaneVis};
@@ -15,6 +15,11 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let poscar_path = args.get(1).cloned();
     let vasprun_path = args.iter().find(|a| a.ends_with(".xml") || a.ends_with(".xml.gz")).cloned();
+    let volumetric_path = args.iter().find(|a| {
+        let lower = a.to_lowercase();
+        lower.contains("chg") || lower.contains("locpot") || lower.contains("elfcar")
+            || lower.ends_with(".vasp") || lower.contains("parchg")
+    }).cloned();
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -29,7 +34,10 @@ fn main() {
         .add_event::<MenuAction>()
         .insert_resource(PoscarPath(poscar_path))
         .insert_resource(VasprunPath(vasprun_path))
+        .insert_resource(VolumetricPath(volumetric_path))
         .insert_resource(data::ElementData::load())
+        .insert_resource(LoadedVolume(None))
+        .insert_resource(IsoState::default())
         .insert_resource(ui::VasprunData::default())
         .insert_resource(ui::VasprunUiState::default())
         .insert_resource(CameraState::default())
@@ -45,7 +53,13 @@ fn main() {
         .insert_resource(ui::menu::SymprecInput::default())
         .insert_resource(ui::menu::MirrorVisibility::default())
         .add_systems(Startup, setup_scene)
-        .add_systems(Update, ui::menu_bar_system)
+        // UI layout order matters: top panel first, then side panels, then windows
+        .add_systems(Update, ui::menu_bar_system
+            .before(ui::vasprun_panel_system)
+            .before(isosurface_panel)
+        )
+        .add_systems(Update, ui::vasprun_panel_system)
+        .add_systems(Update, isosurface_panel)
         .add_systems(Update, ui::menu::wyckoff_legend_system)
         .add_systems(Update, ui::menu::handle_menu_actions)
         .add_systems(Update, orbit_camera)
@@ -58,9 +72,12 @@ fn main() {
         .add_systems(Update, handle_individual_mirror_toggle)
         .add_systems(Update, handle_rerun_symmetry)
         .add_systems(Update, handle_create_supercell)
-        .add_systems(Update, ui::vasprun_panel_system)
         .add_systems(Update, update_trajectory_step)
         .add_systems(Update, update_ldos_coloring)
+        .add_systems(Update, update_isosurface)
+        .add_systems(Update, handle_open_structure)
+        .add_systems(Update, handle_open_vasprun)
+        .add_systems(Update, handle_open_volumetric)
         .add_systems(Update, vis::sync_gizmo_camera)
         .add_systems(Update, update_gizmo_viewport)
         .run();
@@ -71,6 +88,26 @@ struct PoscarPath(Option<String>);
 
 #[derive(Resource)]
 struct VasprunPath(Option<String>);
+
+#[derive(Resource)]
+struct VolumetricPath(Option<String>);
+
+#[derive(Resource)]
+struct LoadedVolume(Option<data::VolumeGrid>);
+
+#[derive(Resource)]
+struct IsoState {
+    isovalue: f32,
+    opacity: f32,
+    show: bool,
+    changed: bool,
+}
+
+impl Default for IsoState {
+    fn default() -> Self {
+        Self { isovalue: 0.0, opacity: 0.5, show: true, changed: false }
+    }
+}
 
 #[derive(Resource)]
 struct StructureExtent(f32);
@@ -132,6 +169,9 @@ fn setup_scene(
     mut loaded: ResMut<LoadedStructure>,
     mut vasprun_data: ResMut<ui::VasprunData>,
     mut vasprun_ui: ResMut<ui::VasprunUiState>,
+    volumetric_path: Res<VolumetricPath>,
+    mut loaded_volume: ResMut<LoadedVolume>,
+    mut iso_state: ResMut<IsoState>,
 ) {
     // Lighting
     commands.spawn((
@@ -210,6 +250,39 @@ fn setup_scene(
         }
     }
 
+    // Load volumetric data if provided
+    if let Some(ref path) = volumetric_path.0 {
+        println!("Loading volumetric data from {path}...");
+        match io::parse_volumetric(Path::new(path)) {
+            Ok((vol_structure, grid)) => {
+                println!("Loaded {}x{}x{} grid ({} points)",
+                    grid.dims[0], grid.dims[1], grid.dims[2],
+                    grid.data.len(),
+                );
+                println!("  min={:.6e}, max={:.6e}, std={:.6e}",
+                    grid.min(), grid.max(), grid.std_dev());
+
+                let suggested = grid.suggest_isovalue();
+                println!("  suggested isovalue: {:.6e}", suggested);
+                iso_state.isovalue = suggested as f32;
+                iso_state.changed = true;
+
+                // Use the volumetric structure if no POSCAR was loaded
+                if loaded.0.is_none() {
+                    load_structure_into_scene(
+                        &vol_structure, &mut commands, &mut meshes, &mut materials,
+                        &elements, &mut camera_state, &mut sym_axes, &mut extent,
+                        symprec.0, true,
+                    );
+                    loaded.0 = Some(vol_structure);
+                }
+
+                loaded_volume.0 = Some(grid);
+            }
+            Err(e) => eprintln!("Error loading volumetric data: {e}"),
+        }
+    }
+
     // Main camera
     let offset = Vec3::new(10.0, 10.0, 10.0);
     commands.spawn((
@@ -278,8 +351,6 @@ fn update_gizmo_viewport(
     });
 }
 
-const ORBIT_SENSITIVITY: f32 = 0.007;
-
 fn orbit_camera(
     mouse: Res<ButtonInput<MouseButton>>,
     mut motion: EventReader<bevy::input::mouse::MouseMotion>,
@@ -292,36 +363,23 @@ fn orbit_camera(
     let mut transform = query.single_mut();
     let pivot = camera_state.pivot;
 
-    // Left-drag: orbit around pivot
+    // Left-drag: orbit
     if mouse.pressed(MouseButton::Left) && !egui_wants_input {
         for ev in motion.read() {
-            let arm = transform.translation - pivot;
-
             if let Some(axis) = camera_state.locked_axis {
-                // Axis-locked: rotate only around the locked axis
-                let angle = -ev.delta.x * ORBIT_SENSITIVITY;
+                let angle = -ev.delta.x * 0.005;
                 let rotation = Quat::from_axis_angle(axis, angle);
+                let arm = transform.translation - pivot;
                 transform.translation = pivot + rotation.mul_vec3(arm);
                 transform.rotation = rotation * transform.rotation;
             } else {
-                // Free orbit: pitch around camera-local right, yaw around camera-local up
-                let cam_right: Vec3 = transform.right().into();
-                let cam_up: Vec3 = transform.up().into();
-                let pitch = Quat::from_axis_angle(cam_right, -ev.delta.y * ORBIT_SENSITIVITY);
-                let yaw = Quat::from_axis_angle(cam_up, -ev.delta.x * ORBIT_SENSITIVITY);
+                let yaw = Quat::from_rotation_y(-ev.delta.x * 0.005);
+                let right = transform.right();
+                let pitch = Quat::from_axis_angle(right.into(), -ev.delta.y * 0.005);
                 let rotation = yaw * pitch;
-
+                let arm = transform.translation - pivot;
                 transform.translation = pivot + rotation.mul_vec3(arm);
                 transform.rotation = rotation * transform.rotation;
-
-                // Roll correction: reconstruct orientation from forward + world up
-                let forward = (pivot - transform.translation).normalize();
-                let world_up = if forward.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
-                let right = forward.cross(world_up).normalize();
-                let up = right.cross(forward).normalize();
-                transform.rotation = Quat::from_mat3(
-                    &bevy::math::Mat3::from_cols(right, up, -forward),
-                );
             }
         }
     }
@@ -360,6 +418,17 @@ fn axis_view_shortcuts(
     camera_state: Res<CameraState>,
     mut query: Query<&mut Transform, (With<Camera3d>, Without<vis::axes_gizmo::GizmoCamera>)>,
 ) {
+    // Spacebar: snap back to default view (looking at pivot from diagonal)
+    if keys.just_pressed(KeyCode::Space) {
+        let mut transform = query.single_mut();
+        let pivot = camera_state.pivot;
+        let dist = (transform.translation - pivot).length();
+        let offset = Vec3::new(1.0, 1.0, 1.0).normalize() * dist;
+        transform.translation = pivot + offset;
+        transform.look_at(pivot, Vec3::Y);
+        return;
+    }
+
     let dir = if keys.just_pressed(KeyCode::KeyX) {
         Some(Vec3::X)
     } else if keys.just_pressed(KeyCode::KeyY) {
@@ -777,21 +846,28 @@ fn update_trajectory_step(
 
     // Spawn magnetic moment arrows if enabled
     if ui_state.show_mag_moments {
-        if let Some(ref mag) = step.magnetization {
+        // Try direct magnetization varray first, then compute from PDOS
+        let vectors: Option<Vec<[f64; 3]>> = if let Some(ref mag) = step.magnetization {
+            Some(mag.iter().map(|m| {
+                if m.len() >= 3 {
+                    [m[0], m[1], m[2]]
+                } else if !m.is_empty() {
+                    [0.0, 0.0, m[0]]
+                } else {
+                    [0.0, 0.0, 0.0]
+                }
+            }).collect())
+        } else if let Some(ref dos) = vr.dos {
+            analysis::magnetic::moments_from_pdos(dos)
+        } else {
+            None
+        };
+
+        if let Some(vectors) = vectors {
             let cart_positions = structure.to_cartesian();
             let positions: Vec<Vec3> = cart_positions.iter()
                 .map(|p| Vec3::new(p.x as f32, p.y as f32, p.z as f32))
                 .collect();
-            // For collinear: moment along z; for non-collinear: use the vector
-            let vectors: Vec<[f64; 3]> = mag.iter().map(|m| {
-                if m.len() >= 3 {
-                    [m[0], m[1], m[2]]
-                } else if !m.is_empty() {
-                    [0.0, 0.0, m[0]] // collinear: along z
-                } else {
-                    [0.0, 0.0, 0.0]
-                }
-            }).collect();
             vis::arrows::spawn_arrows(
                 &mut commands, &mut meshes, &mut materials,
                 &positions, &vectors, ui_state.mag_scale,
@@ -835,4 +911,307 @@ fn update_ldos_coloring(
     );
 
     vis::ldos_coloring::apply_ldos_coloring(&weights, &atom_query, &mut materials);
+}
+
+/// Isosurface control panel.
+fn isosurface_panel(
+    mut contexts: EguiContexts,
+    loaded_volume: Res<LoadedVolume>,
+    mut iso_state: ResMut<IsoState>,
+) {
+    let Some(ref grid) = loaded_volume.0 else { return };
+
+    let ctx = contexts.ctx_mut();
+
+    egui::SidePanel::right("isosurface_panel")
+        .default_width(220.0)
+        .resizable(true)
+        .show(ctx, |ui| {
+            ui.heading("Isosurface");
+
+            let has_negative = grid.min() < 0.0;
+            if has_negative {
+                ui.label("Wavefunction / density difference");
+                ui.label(egui::RichText::new("Blue: +level  Red: −level").small().color(egui::Color32::GRAY));
+            }
+
+            ui.label(format!("Grid: {}×{}×{}", grid.dims[0], grid.dims[1], grid.dims[2]));
+            ui.label(format!("Range: [{:.2e}, {:.2e}]", grid.min(), grid.max()));
+            ui.label(format!("σ = {:.2e}", grid.std_dev()));
+
+            ui.separator();
+
+            if ui.checkbox(&mut iso_state.show, "Show isosurface").changed() {
+                iso_state.changed = true;
+            }
+
+            if iso_state.show {
+                ui.label("Isovalue:");
+                // Text input for precise values
+                let mut iso_str = format!("{:.4e}", iso_state.isovalue);
+                if ui.add(
+                    egui::TextEdit::singleline(&mut iso_str)
+                        .desired_width(100.0)
+                ).lost_focus() {
+                    if let Ok(v) = iso_str.trim().parse::<f32>() {
+                        iso_state.isovalue = v;
+                        iso_state.changed = true;
+                    }
+                }
+
+                // Slider for quick adjustment (log scale)
+                let abs_max = grid.min().abs().max(grid.max().abs()) as f32;
+                let log_min = (abs_max * 1e-4).log10();
+                let log_max = abs_max.log10();
+                let mut log_val = iso_state.isovalue.abs().max(1e-20).log10();
+                if ui.add(egui::Slider::new(&mut log_val, log_min..=log_max)
+                    .text("log₁₀")
+                ).changed() {
+                    iso_state.isovalue = 10.0f32.powf(log_val);
+                    iso_state.changed = true;
+                }
+
+                ui.separator();
+
+                ui.label("Opacity:");
+                if ui.add(egui::Slider::new(&mut iso_state.opacity, 0.05..=1.0)
+                    .text("α")
+                ).changed() {
+                    iso_state.changed = true;
+                }
+
+                if ui.button("Reset to suggested").clicked() {
+                    iso_state.isovalue = grid.suggest_isovalue() as f32;
+                    iso_state.changed = true;
+                }
+            }
+        });
+}
+
+/// Rebuild isosurface mesh when isovalue or visibility changes.
+fn update_isosurface(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut iso_state: ResMut<IsoState>,
+    loaded_volume: Res<LoadedVolume>,
+    iso_query: Query<Entity, With<vis::isosurface::IsosurfaceEntity>>,
+) {
+    if !iso_state.changed {
+        return;
+    }
+    iso_state.changed = false;
+
+    // Despawn old isosurface
+    vis::isosurface::despawn_isosurface(&mut commands, &iso_query);
+
+    if !iso_state.show {
+        return;
+    }
+
+    let Some(ref grid) = loaded_volume.0 else { return };
+
+    println!("Computing isosurface at level {:.4e}...", iso_state.isovalue);
+    vis::isosurface::spawn_isosurface(
+        &mut commands, &mut meshes, &mut materials,
+        grid, iso_state.isovalue as f64, iso_state.opacity,
+    );
+}
+
+/// Handle opening a structure file from the File menu.
+fn handle_open_structure(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut events: EventReader<MenuAction>,
+    mut loaded: ResMut<LoadedStructure>,
+    elements: Res<data::ElementData>,
+    mut camera_state: ResMut<CameraState>,
+    mut sym_axes: ResMut<SymmetryAxes>,
+    mut extent: ResMut<StructureExtent>,
+    symprec: Res<SymmetryTolerance>,
+    periodic: Res<PeriodicImages>,
+    atom_query: Query<Entity, With<vis::atoms::AtomMarker>>,
+    outline_query: Query<Entity, With<UnitCellOutline>>,
+    mut cam_query: Query<&mut Transform, (With<Camera3d>, Without<vis::axes_gizmo::GizmoCamera>)>,
+) {
+    let mut path_to_load = None;
+    for event in events.read() {
+        if let MenuAction::OpenStructure(path) = event {
+            path_to_load = Some(path.clone());
+        }
+    }
+
+    let Some(path) = path_to_load else { return };
+
+    match io::parse_poscar(Path::new(&path)) {
+        Ok(structure) => {
+            println!("Loaded {} atoms from {}", structure.num_atoms(), path.display());
+
+            // Despawn old scene
+            for entity in atom_query.iter() {
+                commands.entity(entity).despawn();
+            }
+            vis::despawn_unit_cell(&mut commands, &outline_query);
+
+            load_structure_into_scene(
+                &structure, &mut commands, &mut meshes, &mut materials,
+                &elements, &mut camera_state, &mut sym_axes, &mut extent,
+                symprec.0, periodic.0,
+            );
+
+            // Reposition camera
+            let mut cam = cam_query.single_mut();
+            let offset = Vec3::new(1.0, 1.0, 1.0).normalize() * extent.0 * 2.0;
+            cam.translation = camera_state.pivot + offset;
+            cam.look_at(camera_state.pivot, Vec3::Y);
+
+            loaded.0 = Some(structure);
+        }
+        Err(e) => eprintln!("Error loading structure: {e}"),
+    }
+}
+
+/// Handle opening a vasprun.xml from the File menu.
+fn handle_open_vasprun(
+    mut events: EventReader<MenuAction>,
+    mut vasprun_data: ResMut<ui::VasprunData>,
+    mut vasprun_ui: ResMut<ui::VasprunUiState>,
+    mut loaded: ResMut<LoadedStructure>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    elements: Res<data::ElementData>,
+    mut camera_state: ResMut<CameraState>,
+    mut sym_axes: ResMut<SymmetryAxes>,
+    mut extent: ResMut<StructureExtent>,
+    symprec: Res<SymmetryTolerance>,
+    atom_query: Query<Entity, With<vis::atoms::AtomMarker>>,
+    outline_query: Query<Entity, With<UnitCellOutline>>,
+    mut cam_query: Query<&mut Transform, (With<Camera3d>, Without<vis::axes_gizmo::GizmoCamera>)>,
+) {
+    let mut path_to_load = None;
+    for event in events.read() {
+        if let MenuAction::OpenVasprun(path) = event {
+            path_to_load = Some(path.clone());
+        }
+    }
+
+    let Some(path) = path_to_load else { return };
+
+    println!("Loading vasprun.xml from {}...", path.display());
+    let opts = io::vasprun::ParseOptions {
+        parse_projected: true,
+        ..Default::default()
+    };
+    match io::vasprun::parse_vasprun(&path, opts) {
+        Ok(vr) => {
+            println!("Loaded vasprun.xml: {} ionic steps, {} atoms",
+                vr.ionic_steps.len(), vr.atominfo.atoms.len());
+
+            // Initialize LDOS UI state
+            if let Some(ref dos) = vr.dos {
+                vasprun_ui.ldos_energy_min = *dos.total.energies.first().unwrap_or(&-10.0) as f32;
+                vasprun_ui.ldos_energy_max = *dos.total.energies.last().unwrap_or(&10.0) as f32;
+                vasprun_ui.ldos_energy = dos.efermi as f32;
+                if let Some(ref pdos) = dos.partial {
+                    vasprun_ui.orbital_labels = pdos.orbitals.clone();
+                    vasprun_ui.selected_orbitals = vec![true; pdos.orbitals.len()];
+                }
+            }
+            vasprun_ui.current_step = 0;
+
+            // Load initial structure
+            let vr_struct = &vr.initial_structure;
+            let structure = convert_vasprun_structure(vr_struct);
+
+            for entity in atom_query.iter() {
+                commands.entity(entity).despawn();
+            }
+            vis::despawn_unit_cell(&mut commands, &outline_query);
+
+            load_structure_into_scene(
+                &structure, &mut commands, &mut meshes, &mut materials,
+                &elements, &mut camera_state, &mut sym_axes, &mut extent,
+                symprec.0, true,
+            );
+
+            let mut cam = cam_query.single_mut();
+            let offset = Vec3::new(1.0, 1.0, 1.0).normalize() * extent.0 * 2.0;
+            cam.translation = camera_state.pivot + offset;
+            cam.look_at(camera_state.pivot, Vec3::Y);
+
+            loaded.0 = Some(structure);
+            vasprun_data.0 = Some(vr);
+        }
+        Err(e) => eprintln!("Error loading vasprun.xml: {e}"),
+    }
+}
+
+/// Handle opening a volumetric file from the File menu.
+fn handle_open_volumetric(
+    mut events: EventReader<MenuAction>,
+    mut loaded_volume: ResMut<LoadedVolume>,
+    mut iso_state: ResMut<IsoState>,
+    mut loaded: ResMut<LoadedStructure>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    elements: Res<data::ElementData>,
+    mut camera_state: ResMut<CameraState>,
+    mut sym_axes: ResMut<SymmetryAxes>,
+    mut extent: ResMut<StructureExtent>,
+    symprec: Res<SymmetryTolerance>,
+    atom_query: Query<Entity, With<vis::atoms::AtomMarker>>,
+    outline_query: Query<Entity, With<UnitCellOutline>>,
+    iso_query: Query<Entity, With<vis::isosurface::IsosurfaceEntity>>,
+    mut cam_query: Query<&mut Transform, (With<Camera3d>, Without<vis::axes_gizmo::GizmoCamera>)>,
+) {
+    let mut path_to_load = None;
+    for event in events.read() {
+        if let MenuAction::OpenVolumetric(path) = event {
+            path_to_load = Some(path.clone());
+        }
+    }
+
+    let Some(path) = path_to_load else { return };
+
+    println!("Loading volumetric data from {}...", path.display());
+    match io::parse_volumetric(Path::new(&path)) {
+        Ok((vol_structure, grid)) => {
+            println!("Loaded {}x{}x{} grid", grid.dims[0], grid.dims[1], grid.dims[2]);
+
+            let suggested = grid.suggest_isovalue();
+            iso_state.isovalue = suggested as f32;
+            iso_state.show = true;
+            iso_state.changed = true;
+
+            // Despawn old isosurface
+            vis::isosurface::despawn_isosurface(&mut commands, &iso_query);
+
+            // Load structure if none loaded
+            if loaded.0.is_none() {
+                for entity in atom_query.iter() {
+                    commands.entity(entity).despawn();
+                }
+                vis::despawn_unit_cell(&mut commands, &outline_query);
+
+                load_structure_into_scene(
+                    &vol_structure, &mut commands, &mut meshes, &mut materials,
+                    &elements, &mut camera_state, &mut sym_axes, &mut extent,
+                    symprec.0, true,
+                );
+
+                let mut cam = cam_query.single_mut();
+                let offset = Vec3::new(1.0, 1.0, 1.0).normalize() * extent.0 * 2.0;
+                cam.translation = camera_state.pivot + offset;
+                cam.look_at(camera_state.pivot, Vec3::Y);
+
+                loaded.0 = Some(vol_structure);
+            }
+
+            loaded_volume.0 = Some(grid);
+        }
+        Err(e) => eprintln!("Error loading volumetric data: {e}"),
+    }
 }

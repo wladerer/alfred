@@ -68,12 +68,11 @@ pub fn vasprun_panel_system(
 
     let ctx = contexts.ctx_mut();
 
-    egui::Window::new("Vasprun")
-        .default_pos([10.0, 40.0])
-        .resizable(true)
+    egui::SidePanel::right("vasprun_panel")
         .default_width(300.0)
-        .collapsible(true)
+        .resizable(true)
         .show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
             // --- Trajectory scrubber ---
             let n_steps = vr.ionic_steps.len();
             let step = &vr.ionic_steps[ui_state.current_step.min(n_steps - 1)];
@@ -129,8 +128,19 @@ pub fn vasprun_panel_system(
             // --- Magnetic moments ---
             ui.heading("Magnetic Moments");
             let has_mag = step.magnetization.is_some();
-            if has_mag {
-                if ui.checkbox(&mut ui_state.show_mag_moments, "Show moments").changed() {
+            // Can also compute from PDOS for VASP 6.x (ISPIN=2, no magnetization varray)
+            let can_compute_mag = !has_mag
+                && vr.dos.as_ref().and_then(|d| d.partial.as_ref()).is_some()
+                && vr.dos.as_ref().map(|d| d.total.densities.shape()[0] >= 2).unwrap_or(false);
+            let mag_available = has_mag || can_compute_mag;
+
+            if mag_available {
+                let label = if can_compute_mag {
+                    "Show moments (from PDOS)"
+                } else {
+                    "Show moments"
+                };
+                if ui.checkbox(&mut ui_state.show_mag_moments, label).changed() {
                     ui_state.step_changed = true;
                 }
                 if ui_state.show_mag_moments {
@@ -158,9 +168,11 @@ pub fn vasprun_panel_system(
                 let nedos = dos.total.energies.len();
                 let noncollinear = is_noncollinear(vr);
                 let spin_polarized = nspins == 2 && !noncollinear;
+                let efermi = dos.efermi as f32;
 
-                let e_min = ui_state.ldos_energy_min;
-                let e_max = ui_state.ldos_energy_max;
+                // Plot in E - E_F coordinates
+                let e_min = ui_state.ldos_energy_min - efermi;
+                let e_max = ui_state.ldos_energy_max - efermi;
                 let plot_height = 250.0;
                 let plot_width = ui.available_width().max(200.0);
 
@@ -173,14 +185,16 @@ pub fn vasprun_panel_system(
                 // Background
                 painter.rect_filled(rect, 2.0, egui::Color32::from_gray(30));
 
-                // energy → y (top=max, bottom=min)
-                let e_to_y = |e: f32| -> f32 {
-                    let t = (e - e_min) / (e_max - e_min);
+                // e_rel (E - E_F) → y position (top=max, bottom=min)
+                let e_to_y = |e_rel: f32| -> f32 {
+                    let t = (e_rel - e_min) / (e_max - e_min);
                     rect.bottom() - t * rect.height()
                 };
-                let y_to_e = |y: f32| -> f32 {
+                // y position → absolute energy (for LDOS cursor)
+                let y_to_e_abs = |y: f32| -> f32 {
                     let t = (rect.bottom() - y) / rect.height();
-                    e_min + t * (e_max - e_min)
+                    let e_rel = e_min + t * (e_max - e_min);
+                    e_rel + efermi // convert back to absolute
                 };
 
                 // Find max DOS for x-axis scaling
@@ -249,10 +263,9 @@ pub fn vasprun_panel_system(
                     );
                 }
 
-                // Draw Fermi level
-                let efermi = dos.efermi as f32;
-                if efermi >= e_min && efermi <= e_max {
-                    let y_fermi = e_to_y(efermi);
+                // Draw Fermi level at E - E_F = 0
+                if 0.0 >= e_min && 0.0 <= e_max {
+                    let y_fermi = e_to_y(0.0);
                     painter.line_segment(
                         [egui::pos2(rect.left(), y_fermi), egui::pos2(rect.right(), y_fermi)],
                         egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(100, 100, 100, 120)),
@@ -277,10 +290,10 @@ pub fn vasprun_panel_system(
 
                     let points: Vec<egui::Pos2> = (0..nedos)
                         .filter_map(|i| {
-                            let e = dos.total.energies[i] as f32;
-                            if e < e_min || e > e_max { return None; }
+                            let e_rel = dos.total.energies[i] as f32 - efermi;
+                            if e_rel < e_min || e_rel > e_max { return None; }
                             let d = dos.total.densities[[spin, i]];
-                            Some(egui::pos2(dos_to_x(d, spin), e_to_y(e)))
+                            Some(egui::pos2(dos_to_x(d, spin), e_to_y(e_rel)))
                         })
                         .collect();
 
@@ -335,9 +348,9 @@ pub fn vasprun_panel_system(
                     let pdos_color = egui::Color32::from_rgb(255, 200, 50);
                     let points: Vec<egui::Pos2> = (0..nedos)
                         .filter_map(|i| {
-                            let e = dos.total.energies[i] as f32;
-                            if e < e_min || e > e_max { return None; }
-                            Some(egui::pos2(dos_to_x(summed[i], 0), e_to_y(e)))
+                            let e_rel = dos.total.energies[i] as f32 - efermi;
+                            if e_rel < e_min || e_rel > e_max { return None; }
+                            Some(egui::pos2(dos_to_x(summed[i], 0), e_to_y(e_rel)))
                         })
                         .collect();
 
@@ -349,10 +362,10 @@ pub fn vasprun_panel_system(
                     }
                 }
 
-                // Draw energy cursor bar
-                let cursor_e = ui_state.ldos_energy;
-                if cursor_e >= e_min && cursor_e <= e_max {
-                    let y_cursor = e_to_y(cursor_e);
+                // Draw energy cursor bar (in E - E_F space)
+                let cursor_e_rel = ui_state.ldos_energy - efermi;
+                if cursor_e_rel >= e_min && cursor_e_rel <= e_max {
+                    let y_cursor = e_to_y(cursor_e_rel);
                     painter.line_segment(
                         [egui::pos2(rect.left(), y_cursor), egui::pos2(rect.right(), y_cursor)],
                         egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 220, 50)),
@@ -360,16 +373,18 @@ pub fn vasprun_panel_system(
                     painter.text(
                         egui::pos2(rect.right() - 2.0, y_cursor + 2.0),
                         egui::Align2::RIGHT_TOP,
-                        format!("{:.2} eV", cursor_e),
+                        format!("{:.2} eV", cursor_e_rel),
                         egui::FontId::proportional(10.0),
                         egui::Color32::from_rgb(255, 220, 50),
                     );
                 }
 
-                // Click/drag to move energy cursor
+                // Click/drag to move energy cursor (convert back to absolute energy)
                 if response.dragged() || response.clicked() {
                     if let Some(pos) = response.interact_pointer_pos() {
-                        let new_e = y_to_e(pos.y).clamp(e_min, e_max);
+                        let new_e = y_to_e_abs(pos.y).clamp(
+                            ui_state.ldos_energy_min, ui_state.ldos_energy_max,
+                        );
                         ui_state.ldos_energy = new_e;
                         ui_state.ldos_changed = true;
                     }
@@ -425,10 +440,14 @@ pub fn vasprun_panel_system(
                     ui_state.ldos_changed = true;
                 }
                 if ui_state.show_ldos {
+                    let abs_min = ui_state.ldos_energy_min;
+                    let abs_max = ui_state.ldos_energy_max;
                     if ui.add(egui::Slider::new(
                         &mut ui_state.ldos_energy,
-                        e_min..=e_max,
-                    ).text("E (eV)").step_by(0.01)).changed() {
+                        abs_min..=abs_max,
+                    ).text("E (eV)").step_by(0.01)
+                     .custom_formatter(|v, _| format!("{:.2}", v as f32 - efermi))
+                    ).changed() {
                         ui_state.ldos_changed = true;
                     }
 
@@ -469,5 +488,6 @@ pub fn vasprun_panel_system(
             } else {
                 ui.label(egui::RichText::new("No DOS data").color(egui::Color32::GRAY));
             }
+            }); // ScrollArea
         });
 }

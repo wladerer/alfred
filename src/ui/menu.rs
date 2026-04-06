@@ -7,8 +7,9 @@ use crate::SymmetryTolerance;
 /// Events emitted by menu actions.
 #[derive(Event)]
 pub enum MenuAction {
-    OpenFile,
-    LoadVasprun,
+    OpenStructure(std::path::PathBuf),
+    OpenVasprun(std::path::PathBuf),
+    OpenVolumetric(std::path::PathBuf),
     Quit,
     ResetCamera,
     ToggleUnitCell,
@@ -71,13 +72,38 @@ pub fn menu_bar_system(
         egui::menu::bar(ui, |ui| {
             // File menu
             ui.menu_button("File", |ui| {
-                if ui.button("Open POSCAR...").clicked() {
-                    menu_events.send(MenuAction::OpenFile);
+                if ui.button("Open Structure...").clicked() {
                     ui.close_menu();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("Open Structure File")
+                        .add_filter("POSCAR/CONTCAR", &["vasp", "POSCAR", "CONTCAR", "poscar", "contcar"])
+                        .add_filter("All files", &["*"])
+                        .pick_file()
+                    {
+                        menu_events.send(MenuAction::OpenStructure(path));
+                    }
                 }
-                if ui.button("Load vasprun.xml...").clicked() {
-                    menu_events.send(MenuAction::LoadVasprun);
+                if ui.button("Open vasprun.xml...").clicked() {
                     ui.close_menu();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("Open vasprun.xml")
+                        .add_filter("vasprun", &["xml", "gz"])
+                        .add_filter("All files", &["*"])
+                        .pick_file()
+                    {
+                        menu_events.send(MenuAction::OpenVasprun(path));
+                    }
+                }
+                if ui.button("Open Volumetric...").clicked() {
+                    ui.close_menu();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("Open Volumetric Data")
+                        .add_filter("CHGCAR/LOCPOT/wavefunction", &["vasp", "CHGCAR", "LOCPOT", "ELFCAR", "PARCHG"])
+                        .add_filter("All files", &["*"])
+                        .pick_file()
+                    {
+                        menu_events.send(MenuAction::OpenVolumetric(path));
+                    }
                 }
                 ui.separator();
                 if ui.button("Quit").clicked() {
@@ -308,13 +334,10 @@ pub fn handle_menu_actions(
             MenuAction::Quit => {
                 exit.send(AppExit::Success);
             }
-            MenuAction::OpenFile => {
-                println!("TODO: File open dialog");
-            }
             MenuAction::ResetCamera => {
                 println!("TODO: Reset camera");
             }
-            // Handled by dedicated systems
+            // File loads and other actions handled by dedicated systems
             _ => {}
         }
     }
