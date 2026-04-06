@@ -6,6 +6,7 @@ pub mod isosurface;
 pub mod ldos_coloring;
 pub mod axis_indicator;
 pub mod mirror_plane;
+pub mod symmetry_anim;
 pub mod unit_cell;
 pub mod wyckoff;
 

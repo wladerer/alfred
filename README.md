@@ -1,26 +1,12 @@
 # Alfred
 
-A Rust-based visualization and analysis platform for atomistic simulation data, focused on VASP workflows.
+Alfred is a structure visualizer with a primary focus on crystallographic symmetry and electronic structure. It was a natural extension of my inability to communicate what I saw in my own head to my colleagues. Planes of symmetry, rotational axes, wallpaper projections, etc. were so neatly organized in my head but were very challenging to articulate. Furthermore, if I were to even attempt a sketch I'd make the situation even worse. Thus, I started making alfred. I've included as many symmetry visualizations possible to aid in other's learning or intuition for crystallography. Furthermore, I've baked in a good deal of on-site properties and volumetric data visualizations to aid in analyzing the electronic structure of your ab initio calculations.
 
-## Features
+This program is named after my childhood dog, Alfred. He knew nothing of crystallography but he did know how to take it easy. Hopefully this tool can make your life a little easier.
 
-- **Structure visualization** — POSCAR/CONTCAR loading, element-colored atom spheres with correct radii, periodic boundary images, unit cell outline, supercell generation
-- **Symmetry analysis** — spacegroup detection via spglib, rotation axes, mirror planes, Wyckoff positions with colored highlights and legend
-- **Camera controls** — orbit (left drag), pan (right drag), zoom (scroll), axis-aligned views (X/Y/Z keys), symmetry axis cycling (N), axis-locked rotation (Shift+N)
-- **vasprun.xml support** — ionic step trajectory scrubber, force vectors, magnetic moments (including PDOS-derived for VASP 6.x), density of states plot with spin-polarized mirrored display
-- **LDOS on structure** — color atoms by their DOS contribution at a selected energy, with orbital filtering (s/p/d/f)
-- **Volumetric data** — CHGCAR/LOCPOT/wavefunction parsing, marching cubes isosurface extraction with auto isovalue detection, dual +/- surfaces for wavefunctions
-- **Atom selection** — click to select, info panel with coordinates, Wyckoff site, and species
-- **File dialogs** — native OS file picker for opening structures, vasprun.xml, and volumetric data
-- **Screenshots** — F12 to save PNG
+## Development Prerequisites
 
-## Prerequisites
-
-### Rust toolchain
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
+If you haven't looked at the size of the binary, then you will be shocked to see how large it is. This is because it contains the standard library of Rust as well as its dependencies. This is because it is cross platform and must carry its own libraries wherever it goes. If you would like to _develop_ or tweak alfred, then you might have to install some development packages. I did not include instructions for Windows since I believe it is inhumane to make people develop on Windows. If you must do so, use WSL which is really just a Debian based operating system.
 
 ### System dependencies (Debian/Ubuntu)
 
@@ -32,18 +18,11 @@ sudo apt install -y cmake libclang-dev libasound2-dev libudev-dev libwayland-dev
 - `libasound2-dev` + `libudev-dev` — required by Bevy (rendering engine)
 - `libwayland-dev` + `libxkbcommon-dev` — Wayland display support
 
-### Fedora/RHEL
-
-```bash
-sudo dnf install -y cmake clang-devel alsa-lib-devel systemd-devel wayland-devel libxkbcommon-devel
-```
-
 ### macOS
 
 ```bash
 brew install cmake llvm
 ```
-
 Bevy dependencies are handled automatically on macOS.
 
 ## Building
@@ -90,6 +69,8 @@ Files can also be opened at runtime via **File > Open...** dialogs.
 | **Left drag** | Orbit camera |
 | **Right drag** | Pan camera |
 | **Scroll** | Zoom |
+| **Arrow keys** | Pan (scene moves in arrow direction) |
+| **I / J / K / L** | Fine rotation (pitch / yaw) |
 | **X / Y / Z** | Snap to axis-aligned view |
 | **Space** | Reset to default view |
 | **N** | Cycle symmetry axes |
@@ -98,19 +79,20 @@ Files can also be opened at runtime via **File > Open...** dialogs.
 | **P** | Toggle periodic boundary images |
 | **W** | Toggle Wyckoff position highlights |
 | **M** | Toggle all mirror planes |
-| **Esc** | Deselect atom |
 | **F12** | Save screenshot |
 
 ## Architecture
 
 ```
 src/
-├── main.rs          # Bevy app, camera, UI wiring
+├── main.rs          # App builder and system registration
+├── camera.rs        # Camera controls (orbit, pan, IJKL, axis snap)
+├── scene.rs         # Scene lifecycle (loading, toggling, trajectory, screenshots)
 ├── data/            # Canonical data models (Structure, VolumeGrid, ElementData)
 ├── io/              # File parsers (POSCAR, vasprun.xml, volumetric)
-├── analysis/        # Symmetry, marching cubes, magnetic moments
-├── vis/             # Rendering (atoms, arrows, isosurface, unit cell, etc.)
-└── ui/              # egui panels (menu, vasprun, atom info)
+├── analysis/        # Symmetry detection, marching cubes, magnetic moments
+├── vis/             # Rendering (atoms, arrows, isosurface, symmetry animation, etc.)
+└── ui/              # egui panels (info panel, menu bar, vasprun controls)
 ```
 
 Layers depend downward only: IO → Data → Analysis → Visualization → Application.

@@ -27,7 +27,8 @@ pub fn pick_atom(
     let ndc_y = 1.0 - (cursor_pos.y / viewport_size.y) * 2.0; // flip y
 
     // Simple perspective ray: use camera's basis vectors
-    let fov_half = std::f32::consts::FRAC_PI_4; // ~45 degree FOV
+    // Bevy default vertical FOV is π/4 (45°); half of that for ray construction
+    let fov_half = std::f32::consts::FRAC_PI_4 / 2.0;
     let aspect = viewport_size.x / viewport_size.y;
 
     let forward: Vec3 = camera_transform.forward().into();

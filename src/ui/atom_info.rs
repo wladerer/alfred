@@ -8,7 +8,7 @@ use crate::analysis::SymmetryAxes;
 pub fn atom_info_panel(
     mut contexts: EguiContexts,
     selected: Res<SelectedAtom>,
-    loaded: Res<crate::LoadedStructure>,
+    loaded: Res<crate::scene::LoadedStructure>,
     sym_axes: Res<SymmetryAxes>,
 ) {
     let Some(atom_idx) = selected.index else { return };

@@ -58,8 +58,8 @@ pub fn apply_ldos_coloring(
     materials: &mut ResMut<Assets<StandardMaterial>>,
 ) {
     for (marker, mat_handle) in atom_query.iter() {
-        let w = if marker.index < weights.len() {
-            weights[marker.index]
+        let w = if marker.primitive_index < weights.len() {
+            weights[marker.primitive_index]
         } else {
             0.0
         };

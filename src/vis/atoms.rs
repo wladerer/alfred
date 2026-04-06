@@ -6,11 +6,16 @@ use nalgebra::Vector3;
 pub struct AtomMarker {
     pub index: usize,
     pub atomic_number: u8,
+    /// Index into the primitive cell (for mapping back to PDOS/forces after supercell).
+    /// Equal to `index % n_primitive` when a supercell is active.
+    pub primitive_index: usize,
 }
 
 /// Spawn spheres for each atom in the structure.
 /// If `periodic_images` is true, atoms near fractional 0 are duplicated
 /// at the opposite face/edge/corner to fill the unit cell visually.
+/// `n_primitive` is the number of atoms in the primitive cell (for mapping
+/// supercell atoms back to PDOS indices). Pass 0 to use structure.num_atoms().
 pub fn spawn_structure(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
@@ -18,12 +23,14 @@ pub fn spawn_structure(
     elements: &ElementData,
     structure: &Structure,
     periodic_images: bool,
+    n_primitive: usize,
 ) {
     let frac_positions = structure.to_fractional();
     let lat_t = structure.lattice.transpose();
     let sphere = meshes.add(Sphere::new(0.4).mesh().ico(2).unwrap());
 
     let tol = 0.02; // fractional tolerance for boundary detection
+    let n_prim = if n_primitive > 0 { n_primitive } else { structure.num_atoms() };
 
     for (i, frac) in frac_positions.iter().enumerate() {
         let z = structure.atomic_numbers[i];
@@ -42,6 +49,8 @@ pub fn spawn_structure(
             vec![*frac]
         };
 
+        let prim_idx = i % n_prim;
+
         for image_frac in &images {
             let cart = lat_t * image_frac;
             commands.spawn((
@@ -49,7 +58,7 @@ pub fn spawn_structure(
                 MeshMaterial3d(material.clone()),
                 Transform::from_translation(Vec3::new(cart.x as f32, cart.y as f32, cart.z as f32))
                     .with_scale(Vec3::splat(props.radius)),
-                AtomMarker { index: i, atomic_number: z },
+                AtomMarker { index: i, atomic_number: z, primitive_index: prim_idx },
             ));
         }
     }

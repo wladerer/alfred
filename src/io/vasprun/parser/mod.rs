@@ -61,31 +61,26 @@ pub fn parse_document(reader: &mut helpers::XmlReader, opts: &ParseOptions) -> R
                         kpoints_opt = Some(kpoints::parse_kpoints(reader)?);
                     }
                     b"structure" => {
-                        // Determine if initialpos or finalpos by name attribute
                         let name_attr = attr_str(e, b"name");
-                        let atoms = atominfo_opt
-                            .as_ref()
-                            .map(|a| a.atoms.as_slice())
-                            .unwrap_or(&[]);
-                        let s = structure::parse_structure(reader, atoms)?;
                         match name_attr.as_deref() {
-                            Some("initialpos") | None => {
-                                if initial_structure.is_none() {
-                                    initial_structure = Some(s);
-                                } else {
-                                    final_structure = Some(s);
-                                }
+                            Some("initialpos") => {
+                                let atoms = atominfo_opt
+                                    .as_ref()
+                                    .map(|a| a.atoms.as_slice())
+                                    .unwrap_or(&[]);
+                                initial_structure = Some(structure::parse_structure(reader, atoms)?);
                             }
                             Some("finalpos") => {
-                                final_structure = Some(s);
+                                let atoms = atominfo_opt
+                                    .as_ref()
+                                    .map(|a| a.atoms.as_slice())
+                                    .unwrap_or(&[]);
+                                final_structure = Some(structure::parse_structure(reader, atoms)?);
                             }
-                            Some(_) => {
-                                // Any other named structure — treat as initial if not set
-                                if initial_structure.is_none() {
-                                    initial_structure = Some(s);
-                                } else {
-                                    final_structure = Some(s);
-                                }
+                            _ => {
+                                // Skip structures like "primitive_cell" that appear
+                                // before atominfo and would get empty species
+                                skip_element(reader, b"structure")?;
                             }
                         }
                     }

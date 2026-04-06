@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 
 use crate::analysis::SymmetryAxes;
-use crate::SymmetryTolerance;
+use crate::scene::SymmetryTolerance;
 
 /// Events emitted by menu actions.
 #[derive(Event)]
@@ -290,7 +290,7 @@ pub fn menu_bar_system(
 pub fn wyckoff_legend_system(
     mut contexts: EguiContexts,
     sym_axes: Res<SymmetryAxes>,
-    visible: Res<crate::WyckoffVisible>,
+    visible: Res<crate::scene::WyckoffVisible>,
 ) {
     if !visible.0 || sym_axes.wyckoff_sites.is_empty() {
         return;

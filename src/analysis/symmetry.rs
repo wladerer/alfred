@@ -34,6 +34,7 @@ pub struct SymmetryAxes {
     pub axes: Vec<RotationAxis>,
     pub mirrors: Vec<MirrorPlane>,
     pub wyckoff_sites: Vec<WyckoffSite>,
+    pub has_inversion: bool,
     pub current_index: usize,
     pub spacegroup: String,
     pub spacegroup_number: i32,
@@ -84,6 +85,17 @@ pub fn detect_symmetry(structure: &Structure, symprec: f64) -> SymmetryAxes {
     let mirrors = extract_mirror_planes(&dataset.rotations, &lat_t);
     let wyckoff_sites = extract_wyckoff_sites(&dataset);
 
+    // Inversion: rotation matrix = -I (det = -1, trace = -3)
+    let has_inversion = dataset.rotations.iter().any(|rot| {
+        let trace = rot[0][0] + rot[1][1] + rot[2][2];
+        let det = rot[0][0] * (rot[1][1] * rot[2][2] - rot[1][2] * rot[2][1])
+                - rot[0][1] * (rot[1][0] * rot[2][2] - rot[1][2] * rot[2][0])
+                + rot[0][2] * (rot[1][0] * rot[2][1] - rot[1][1] * rot[2][0]);
+        det == -1 && trace == -3
+    });
+
+    println!("Detected spacegroup: {} (#{spacegroup_number})", spacegroup);
+    println!("Found {} symmetry operations", dataset.n_operations);
     println!("Found {} unique rotation axes:", axes.len());
     for ax in &axes {
         println!("  {} — ({:.3}, {:.3}, {:.3})", ax.label, ax.direction.x, ax.direction.y, ax.direction.z);
@@ -91,6 +103,9 @@ pub fn detect_symmetry(structure: &Structure, symprec: f64) -> SymmetryAxes {
     println!("Found {} mirror planes:", mirrors.len());
     for m in &mirrors {
         println!("  {} — normal ({:.3}, {:.3}, {:.3})", m.label, m.normal.x, m.normal.y, m.normal.z);
+    }
+    if has_inversion {
+        println!("Inversion center detected");
     }
     println!("Found {} Wyckoff sites:", wyckoff_sites.len());
     for w in &wyckoff_sites {
@@ -101,6 +116,7 @@ pub fn detect_symmetry(structure: &Structure, symprec: f64) -> SymmetryAxes {
         axes,
         mirrors,
         wyckoff_sites,
+        has_inversion,
         current_index: 0,
         spacegroup,
         spacegroup_number,
@@ -187,15 +203,17 @@ fn extract_mirror_planes(
             });
 
             if !is_dup {
-                // Label based on alignment to lattice axes
+                // Label based on alignment to lattice axes.
+                // Use plain ASCII subscript letters — egui's default font lacks
+                // the Unicode subscript-v (U+1D65) and subscript-h (U+2095) glyphs.
                 let label = if dir.dot(Vec3::X).abs() > 0.99 {
-                    "σ_v(yz)".to_string()
+                    "\u{03C3}v(yz)".to_string()
                 } else if dir.dot(Vec3::Y).abs() > 0.99 {
-                    "σ_v(xz)".to_string()
+                    "\u{03C3}v(xz)".to_string()
                 } else if dir.dot(Vec3::Z).abs() > 0.99 {
-                    "σ_h(xy)".to_string()
+                    "\u{03C3}h(xy)".to_string()
                 } else {
-                    "σ_d".to_string()
+                    "\u{03C3}d".to_string()
                 };
 
                 found.push(MirrorPlane { normal: dir, label });
@@ -250,7 +268,7 @@ fn extract_rotation_axes(
                 if dot > 0.999 {
                     if fold > existing.fold {
                         existing.fold = fold;
-                        existing.label = format!("C{fold}");
+                        existing.label = format!("C{}", fold_subscript(fold));
                     }
                     true
                 } else {
@@ -262,7 +280,7 @@ fn extract_rotation_axes(
                 found.push(RotationAxis {
                     direction: dir,
                     fold,
-                    label: format!("C{fold}"),
+                    label: format!("C{}", fold_subscript(fold)),
                 });
             }
         }
@@ -270,6 +288,16 @@ fn extract_rotation_axes(
 
     found.sort_by(|a, b| b.fold.cmp(&a.fold));
     found
+}
+
+/// Convert a fold number to its Unicode subscript character(s).
+fn fold_subscript(fold: u8) -> char {
+    match fold {
+        0 => '\u{2080}', 1 => '\u{2081}', 2 => '\u{2082}',
+        3 => '\u{2083}', 4 => '\u{2084}', 5 => '\u{2085}',
+        6 => '\u{2086}', 7 => '\u{2087}', 8 => '\u{2088}',
+        9 => '\u{2089}', _ => '?',
+    }
 }
 
 fn fold_from_trace(trace: f64) -> u8 {
