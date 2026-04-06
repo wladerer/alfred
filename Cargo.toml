@@ -1,0 +1,26 @@
+[package]
+name = "alfred"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = "0.15"
+bevy_egui = "0.33"
+nalgebra = "0.33"
+encoding_rs = "0.8"
+memchr = "2"
+flate2 = "1"
+indexmap = "2"
+ndarray = "0.16"
+quick-xml = { version = "0.37", features = ["encoding"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+spglib = "1.15"
+thiserror = "2"
+
+# Enable fast compiles for dev
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
