@@ -1,5 +1,12 @@
 # Alfred
 
+<table>
+  <tr>
+    <td><img src="docs/NaCl_supercell.png" alt="NaCl supercell with detected Fm-3m symmetry, rotation axes, and mirror planes"></td>
+    <td><img src="docs/Boride_Forces.png" alt="V6B8 boride structure with mirror plane and force vectors"></td>
+  </tr>
+</table>
+
 Alfred is a structure visualizer with a primary focus on crystallographic symmetry and electronic structure. It was a natural extension of my inability to communicate what I saw in my own head to my colleagues. Planes of symmetry, rotational axes, wallpaper projections, etc. were so neatly organized in my head but were very challenging to articulate. Furthermore, if I were to even attempt a sketch I'd make the situation even worse. Thus, I started making alfred. I've included as many symmetry visualizations possible to aid in other's learning or intuition for crystallography. Furthermore, I've baked in a good deal of on-site properties and volumetric data visualizations to aid in analyzing the electronic structure of your ab initio calculations.
 
 This program is named after my childhood dog, Alfred. He knew nothing of crystallography but he did know how to take it easy. Hopefully this tool can make your life a little easier.
