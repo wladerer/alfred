@@ -8,46 +8,46 @@ Alfred is a Rust-based visualization and analysis platform for atomistic simulat
 
 ## Build & Development
 
-This is a Rust project targeting stable Rust 1.75+. Standard cargo commands apply:
+Rust stable 1.75+. System deps: `cmake`, `libclang-dev`, `libasound2-dev`, `libudev-dev`, `libwayland-dev`, `libxkbcommon-dev`.
 
-- `cargo build` — build the project
-- `cargo test` — run all tests
+- `cargo build` — dev build
+- `cargo build --release` — optimized release (stripped, LTO)
+- `cargo test` — run all tests (14 currently)
 - `cargo test <test_name>` — run a single test
-- `cargo clippy` — lint
-- `cargo fmt` — format code
-- `cargo run` — run the application
+- `cargo run -- POSCAR` — run with a structure file
+- `cargo run -- vasprun.xml` — run with vasprun data
+- `cargo run -- density.vasp` — run with volumetric data
 
 ## Architecture
 
-The system has five strict layers with dependencies flowing **downward only**:
+Five layers, dependencies flow **downward only**:
 
-1. **IO Layer** — File format parsing (POSCAR, CHGCAR, CIF, etc.) into canonical models. No analysis logic.
-2. **Data Layer** — Canonical representations: `Structure` (lattice + positions + atomic numbers), `VolumeGrid` (3D scalar fields), `NeighborList`, `SymmetryDataset`.
-3. **Analysis Layer** — Scientific algorithms (symmetry via spglib, neighbor detection via KD-tree, transformations, isosurfaces). No rendering.
-4. **Visualization Layer** — Rendering scientific data (atoms as spheres, bonds as cylinders, isosurfaces as triangle meshes). No file parsing.
-5. **Application Layer** — Bevy ECS: user interaction, UI panels (bevy_egui), scene control.
+1. **IO** (`src/io/`) — POSCAR parser, vendored vasprun.xml parser (from vasprunrs), volumetric data parser. No analysis logic.
+2. **Data** (`src/data/`) — `Structure` (lattice + positions + atomic numbers), `VolumeGrid` (3D scalar fields), `ElementData` (colors/radii from `resources/atoms.json`).
+3. **Analysis** (`src/analysis/`) — Symmetry (spglib), marching cubes isosurface, magnetic moment computation from PDOS. No rendering.
+4. **Visualization** (`src/vis/`) — Atom spheres, arrows (forces/moments), isosurface meshes, unit cell, Wyckoff highlights, mirror planes, axes gizmo, selection highlight, LDOS coloring. No file parsing.
+5. **UI/Application** (`src/ui/`, `src/main.rs`) — Bevy ECS app, egui panels (menu bar, vasprun panel, isosurface panel, atom info, Wyckoff legend), camera control, keyboard shortcuts.
 
 ## Key Design Constraints
 
-- **No layer may depend on a higher layer.** Analysis must never import visualization. IO must never import analysis.
-- **All file formats convert to canonical internal models** (`Structure`, `VolumeGrid`). No analysis code depends on file formats directly.
-- **Do not reimplement** symmetry detection, file parsing, or spacegroup analysis — use existing libraries (spglib, vasp-poscar, vaspchg_rs).
-- **Do implement** visualization, workflow tools, and analysis pipelines.
-- **Data-oriented design** — prefer simple structs, immutable scientific data, explicit transformations. Avoid deep inheritance/complex hierarchies.
-- **All scientific transformations must be deterministic, traceable, and explicit.**
+- No layer may depend on a higher layer.
+- All file formats convert to canonical models (`Structure`, `VolumeGrid`). Analysis code never depends on file formats directly.
+- The vasprun.xml parser is vendored from `~/github/vasprunrs` (MIT license) in `src/io/vasprun/`. Module paths use `super::` to reference the vendored types/errors.
+- Element colors and radii are loaded at compile time from `resources/atoms.json` via `include_str!`.
+- Bevy features are explicitly trimmed in Cargo.toml to reduce binary size.
 
 ## Key Dependencies
 
 | Purpose | Crate |
 |---|---|
-| Math | nalgebra, ndarray, glam (Bevy compat) |
-| VASP IO | vasp-poscar, vaspchg_rs |
-| Symmetry | spglib (Rust bindings) |
-| Spatial queries | kiddo (KD-tree) |
-| Parallelism | rayon |
-| Rendering | bevy, bevy_egui, bevy_mod_picking |
-| Python bridge | pyo3 (optional) |
+| Rendering engine | bevy (0.15, trimmed features) |
+| UI panels | bevy_egui (0.33) |
+| Math | nalgebra, ndarray |
+| Symmetry | spglib (builds C library via cmake) |
+| XML parsing | quick-xml (vendored vasprun parser) |
+| File dialogs | rfd |
+| Compression | flate2 (gzipped vasprun.xml) |
 
 ## Non-Goals
 
-This project does **not** aim to replace pymatgen, ASE, or phonopy. Focus is visualization, analysis integration, and research productivity.
+Does **not** aim to replace pymatgen, ASE, or phonopy. Focus is visualization, analysis integration, and research productivity.

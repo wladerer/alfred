@@ -2,9 +2,23 @@
 name = "alfred"
 version = "0.1.0"
 edition = "2024"
+description = "A materials science visualization platform for atomistic simulation data"
+license = "MIT"
 
 [dependencies]
-bevy = "0.15"
+bevy = { version = "0.15", default-features = false, features = [
+    "bevy_asset",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_render",
+    "bevy_winit",
+    "bevy_state",
+    "bevy_ui",
+    "x11",
+    "wayland",
+    "tonemapping_luts",
+    "default_font",
+] }
 bevy_egui = "0.33"
 nalgebra = "0.33"
 encoding_rs = "0.8"
@@ -19,9 +33,16 @@ serde_json = "1"
 spglib = "1.15"
 thiserror = "2"
 
-# Enable fast compiles for dev
+# Fast dev builds: optimize deps but not our code
 [profile.dev]
 opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Lean release builds
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true
+codegen-units = 1
