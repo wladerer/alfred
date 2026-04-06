@@ -1,6 +1,6 @@
 [package]
 name = "alfred"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A materials science visualization platform for atomistic simulation data"
 license = "MIT"
@@ -42,7 +42,8 @@ opt-level = 3
 
 # Lean release builds
 [profile.release]
-opt-level = "s"
-lto = "thin"
+opt-level = "z"
+lto = true
 strip = true
 codegen-units = 1
+panic = "abort"
